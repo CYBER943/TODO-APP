@@ -27,7 +27,8 @@ import {
   LayoutGrid,
   ListTodo,
   User,
-  Briefcase
+  Briefcase,
+  GripVertical
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, isToday, isAfter, isPast, addDays, startOfToday, endOfToday, startOfWeek, endOfWeek, eachDayOfInterval } from 'date-fns';
@@ -43,6 +44,24 @@ import {
   Pie,
   Cell
 } from 'recharts';
+
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -398,6 +417,7 @@ export default function App() {
                             setEditingTask(task);
                             setIsTaskDialogOpen(true);
                           }}
+                          onUpdateSubtasks={(subtasks) => updateTask(task.id, { subtasks })}
                         />
                       ))
                     ) : (
@@ -644,7 +664,138 @@ function SidebarItem({ icon, label, active, onClick }: { icon: React.ReactNode, 
   );
 }
 
-function TaskItem({ task, onToggle, onDelete, onEdit }: { task: Task, onToggle: () => void, onDelete: () => void, onEdit: () => void, key?: string }) {
+function SortableSubtaskItem({ 
+  st, 
+  onToggle, 
+  onDelete 
+}: { 
+  st: any, 
+  onToggle: () => void, 
+  onDelete: () => void,
+  key?: string
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: st.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 20 : 1,
+  };
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style} 
+      className={cn(
+        "flex items-center gap-2 group/subtask p-1 rounded-md transition-colors",
+        isDragging && "bg-muted shadow-sm ring-1 ring-primary/20"
+      )}
+    >
+      <button 
+        {...attributes} 
+        {...listeners} 
+        className="cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-muted-foreground transition-colors p-0.5"
+      >
+        <GripVertical className="h-3 w-3" />
+      </button>
+      <Checkbox 
+        checked={st.completed}
+        onCheckedChange={onToggle}
+        className="h-4 w-4"
+      />
+      <span className={cn(
+        "text-xs flex-1 truncate",
+        st.completed && "line-through text-muted-foreground"
+      )}>
+        {st.title}
+      </span>
+      <Button 
+        variant="ghost" 
+        size="icon" 
+        className="h-6 w-6 opacity-0 group-hover/subtask:opacity-100 transition-opacity"
+        onClick={onDelete}
+      >
+        <X className="h-3 w-3" />
+      </Button>
+    </div>
+  );
+}
+
+function TaskItem({ 
+  task, 
+  onToggle, 
+  onDelete, 
+  onEdit, 
+  onUpdateSubtasks 
+}: { 
+  task: Task, 
+  onToggle: () => void, 
+  onDelete: () => void, 
+  onEdit: () => void, 
+  onUpdateSubtasks: (subtasks: Task['subtasks']) => void,
+  key?: string 
+}) {
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
+  const [isAddingSubtask, setIsAddingSubtask] = useState(false);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      const oldIndex = task.subtasks.findIndex((st) => st.id === active.id);
+      const newIndex = task.subtasks.findIndex((st) => st.id === over.id);
+
+      onUpdateSubtasks(arrayMove(task.subtasks, oldIndex, newIndex));
+    }
+  };
+
+  const handleAddSubtask = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSubtaskTitle.trim()) return;
+
+    const newSubtask = {
+      id: crypto.randomUUID(),
+      title: newSubtaskTitle.trim(),
+      completed: false
+    };
+
+    onUpdateSubtasks([...task.subtasks, newSubtask]);
+    setNewSubtaskTitle('');
+    setIsAddingSubtask(false);
+  };
+
+  const toggleSubtask = (subtaskId: string) => {
+    const updatedSubtasks = task.subtasks.map(st => 
+      st.id === subtaskId ? { ...st, completed: !st.completed } : st
+    );
+    onUpdateSubtasks(updatedSubtasks);
+  };
+
+  const deleteSubtask = (subtaskId: string) => {
+    const updatedSubtasks = task.subtasks.filter(st => st.id !== subtaskId);
+    onUpdateSubtasks(updatedSubtasks);
+  };
+
+  const completedSubtasks = task.subtasks.filter(st => st.completed).length;
+
   return (
     <motion.div
       layout
@@ -652,65 +803,143 @@ function TaskItem({ task, onToggle, onDelete, onEdit }: { task: Task, onToggle: 
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
       className={cn(
-        "group flex items-start gap-4 p-4 bg-card rounded-xl border shadow-sm hover:shadow-md transition-all duration-200",
+        "group flex flex-col gap-4 p-4 bg-card rounded-xl border shadow-sm hover:shadow-md transition-all duration-200",
         task.completed && "opacity-60 grayscale-[0.5]"
       )}
     >
-      <Checkbox 
-        checked={task.completed} 
-        onCheckedChange={onToggle}
-        className="mt-1 h-5 w-5 rounded-full border-2"
-      />
-      
-      <div className="flex-1 min-w-0 space-y-1">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className={cn(
-            "font-medium text-sm sm:text-base truncate",
-            task.completed && "line-through text-muted-foreground"
-          )}>
-            {task.title}
-          </h3>
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}>
-              <Edit2 className="h-3.5 w-3.5" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onDelete}>
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
+      <div className="flex items-start gap-4">
+        <Checkbox 
+          checked={task.completed} 
+          onCheckedChange={onToggle}
+          className="mt-1 h-5 w-5 rounded-full border-2"
+        />
+        
+        <div className="flex-1 min-w-0 space-y-1 text-left">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className={cn(
+              "font-medium text-sm sm:text-base truncate",
+              task.completed && "line-through text-muted-foreground"
+            )}>
+              {task.title}
+            </h3>
+            <div className="flex items-center gap-1 opacity-10 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}>
+                <Edit2 className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onDelete}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+          
+          {task.description && (
+            <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+              {task.description}
+            </p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            {task.dueDate && (
+              <div className={cn(
+                "flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full",
+                isPast(new Date(task.dueDate)) && !isToday(new Date(task.dueDate)) && !task.completed 
+                  ? "bg-red-100 text-red-600 dark:bg-red-950/30 dark:text-red-400" 
+                  : "bg-muted text-muted-foreground"
+              )}>
+                <CalendarIcon className="h-3 w-3" />
+                {isToday(new Date(task.dueDate)) ? 'Today' : format(new Date(task.dueDate), 'MMM dd')}
+              </div>
+            )}
+            
+            <Badge variant="outline" className={cn("text-[10px] px-2 py-0 border-none capitalize", PRIORITY_COLORS[task.priority])}>
+              <Flag className="h-2.5 w-2.5 mr-1 fill-current" />
+              {task.priority}
+            </Badge>
+
+            {task.tags.map(tag => (
+              <div key={tag} className="flex items-center gap-1 text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
+                <Tag className="h-2.5 w-2.5" />
+                {tag}
+              </div>
+            ))}
           </div>
         </div>
-        
-        {task.description && (
-          <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-            {task.description}
-          </p>
+      </div>
+
+      {/* Subtasks Section */}
+      <div className="ml-9 pt-2 border-t border-dashed space-y-3">
+        {task.subtasks.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                Subtasks ({completedSubtasks}/{task.subtasks.length})
+              </span>
+              <div className="h-1 flex-1 mx-3 bg-muted rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${(completedSubtasks / task.subtasks.length) * 100}%` }}
+                />
+              </div>
+            </div>
+            
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext 
+                items={task.subtasks.map(s => s.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-0.5">
+                  {task.subtasks.map((st) => (
+                    <SortableSubtaskItem 
+                      key={st.id}
+                      st={st}
+                      onToggle={() => toggleSubtask(st.id)}
+                      onDelete={() => deleteSubtask(st.id)}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-3 pt-1">
-          {task.dueDate && (
-            <div className={cn(
-              "flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full",
-              isPast(new Date(task.dueDate)) && !isToday(new Date(task.dueDate)) && !task.completed 
-                ? "bg-red-100 text-red-600 dark:bg-red-950/30 dark:text-red-400" 
-                : "bg-muted text-muted-foreground"
-            )}>
-              <CalendarIcon className="h-3 w-3" />
-              {isToday(new Date(task.dueDate)) ? 'Today' : format(new Date(task.dueDate), 'MMM dd')}
-            </div>
-          )}
-          
-          <Badge variant="outline" className={cn("text-[10px] px-2 py-0 border-none capitalize", PRIORITY_COLORS[task.priority])}>
-            <Flag className="h-2.5 w-2.5 mr-1 fill-current" />
-            {task.priority}
-          </Badge>
-
-          {task.tags.map(tag => (
-            <div key={tag} className="flex items-center gap-1 text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
-              <Tag className="h-2.5 w-2.5" />
-              {tag}
-            </div>
-          ))}
-        </div>
+        {isAddingSubtask ? (
+          <form onSubmit={handleAddSubtask} className="flex items-center gap-2">
+            <Input 
+              value={newSubtaskTitle}
+              onChange={(e) => setNewSubtaskTitle(e.target.value)}
+              placeholder="Add subtask..."
+              className="h-8 text-xs"
+              autoFocus
+            />
+            <Button type="submit" size="sm" className="h-8 px-3">Add</Button>
+            <Button 
+              type="button" 
+              variant="ghost" 
+              size="sm" 
+              className="h-8 px-2"
+              onClick={() => {
+                setIsAddingSubtask(false);
+                setNewSubtaskTitle('');
+              }}
+            >
+              Cancel
+            </Button>
+          </form>
+        ) : (
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            className="h-7 px-2 text-[10px] text-muted-foreground hover:text-foreground -ml-2"
+            onClick={() => setIsAddingSubtask(true)}
+          >
+            <Plus className="h-3 w-3 mr-1" />
+            Add Subtask
+          </Button>
+        )}
       </div>
     </motion.div>
   );
